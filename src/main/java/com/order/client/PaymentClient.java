@@ -8,10 +8,8 @@ import org.springframework.http.HttpMethod;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
-
 import java.nio.charset.StandardCharsets;
 import java.util.Base64;
-import java.util.concurrent.CompletableFuture;
 
 @Service
 public class PaymentClient {
@@ -22,7 +20,7 @@ public class PaymentClient {
     @Autowired
     RestTemplate restTemplate;
     private final String url="http://localhost:9100/payment";
-    public CompletableFuture<String> getPaymentResponse(String paymentMode,double purchaseAmount){
+    public String getPaymentResponse(String paymentMode,double purchaseAmount){
         String credentials = userName + ":" + password;
         String encodedCredentials= Base64.getEncoder().encodeToString(credentials.getBytes(StandardCharsets.UTF_8));
         HttpHeaders httpHeaders=new HttpHeaders();
@@ -32,6 +30,6 @@ public class PaymentClient {
                 HttpMethod.PUT,
                 httpEntity,
                 String.class);
-        return CompletableFuture.completedFuture(payment.getBody());
+        return payment.getBody();
     }
 }

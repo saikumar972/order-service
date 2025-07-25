@@ -16,7 +16,7 @@ public class OrderConfig {
         http
                 .csrf(AbstractHttpConfigurer::disable)
                 .authorizeHttpRequests(auth -> auth
-                        .requestMatchers("/order/placeOrder").permitAll()
+                        .requestMatchers("/order/placeOrder/**").permitAll()
                         .anyRequest().authenticated()
                 )
                 .httpBasic(httpBasic -> { }); // Updated, non-deprecated way

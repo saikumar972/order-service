@@ -1,6 +1,5 @@
-package com.order.client;
+package com.order.asyncClient;
 
-import com.order.dto.InventoryResponse;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpEntity;
@@ -11,26 +10,27 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
 import java.nio.charset.StandardCharsets;
 import java.util.Base64;
+import java.util.concurrent.CompletableFuture;
 
 @Service
-public class InventoryClient {
-    @Value("${inventory.name}")
+public class PaymentAsyncClient {
+    @Value("${payment.name}")
     String userName;
-    @Value("${inventory.password}")
+    @Value("${payment.password}")
     String password;
     @Autowired
     RestTemplate restTemplate;
-    private final String url="http://localhost:9000/inventory";
-    public InventoryResponse getInventoryResponse(String product, double quantity){
+    private final String url="http://localhost:9100/payment";
+    public CompletableFuture<String> getPaymentResponse(String paymentMode,double purchaseAmount){
         String credentials = userName + ":" + password;
         String encodedCredentials= Base64.getEncoder().encodeToString(credentials.getBytes(StandardCharsets.UTF_8));
         HttpHeaders httpHeaders=new HttpHeaders();
         httpHeaders.add("Authorization","Basic "+encodedCredentials);
         HttpEntity<Void> httpEntity=new HttpEntity<Void>(httpHeaders);
-        ResponseEntity<InventoryResponse> inventory=restTemplate.exchange(url + "/updateInventory?productName=" + product + "&quantity=" + quantity,
+        ResponseEntity<String> payment=restTemplate.exchange(url+"/option/"+paymentMode+"/"+purchaseAmount,
                 HttpMethod.PUT,
                 httpEntity,
-                InventoryResponse.class);
-        return inventory.getBody();
+                String.class);
+        return CompletableFuture.completedFuture(payment.getBody());
     }
 }

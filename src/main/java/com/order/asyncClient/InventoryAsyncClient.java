@@ -1,4 +1,4 @@
-package com.order.client;
+package com.order.asyncClient;
 
 import com.order.dto.InventoryResponse;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -11,9 +11,10 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
 import java.nio.charset.StandardCharsets;
 import java.util.Base64;
+import java.util.concurrent.CompletableFuture;
 
 @Service
-public class InventoryClient {
+public class InventoryAsyncClient {
     @Value("${inventory.name}")
     String userName;
     @Value("${inventory.password}")
@@ -21,7 +22,7 @@ public class InventoryClient {
     @Autowired
     RestTemplate restTemplate;
     private final String url="http://localhost:9000/inventory";
-    public InventoryResponse getInventoryResponse(String product, double quantity){
+    public CompletableFuture<InventoryResponse> getInventoryResponse(String product,double quantity){
         String credentials = userName + ":" + password;
         String encodedCredentials= Base64.getEncoder().encodeToString(credentials.getBytes(StandardCharsets.UTF_8));
         HttpHeaders httpHeaders=new HttpHeaders();
@@ -31,6 +32,6 @@ public class InventoryClient {
                 HttpMethod.PUT,
                 httpEntity,
                 InventoryResponse.class);
-        return inventory.getBody();
+        return CompletableFuture.completedFuture(inventory.getBody());
     }
 }
