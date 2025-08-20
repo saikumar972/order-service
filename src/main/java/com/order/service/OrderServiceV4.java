@@ -6,14 +6,18 @@ import com.order.asyncClient.PaymentAsyncClient;
 import com.order.dto.InventoryResponse;
 import com.order.dto.OrderRequest;
 import com.order.dto.OrderResponse;
+import com.order.exceptions.inventoryExceptions.ProductException;
+import com.order.exceptions.orderExceptions.OrderServiceException;
+import com.order.exceptions.paymentExceptions.PaymentException;
 import com.order.repo.OrderRepo;
 import lombok.AllArgsConstructor;
-import lombok.SneakyThrows;
 import lombok.extern.log4j.Log4j2;
 import org.springframework.stereotype.Service;
 import java.util.List;
+import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
 
 @Service
 @AllArgsConstructor
@@ -23,52 +27,112 @@ public class OrderServiceV4 {
     private final InventoryAsyncClient inventoryAsyncClient;
     private final PaymentAsyncClient paymentAsyncClient;
 
-    @SneakyThrows
     public OrderResponse orderResponseV4(OrderRequest orderRequest){
-        //check inventory and grab totalCost
-        List<CompletableFuture<InventoryResponse>> inventoryFutures = checkProductAvailability(orderRequest);
-        CompletableFuture<Void> futures=CompletableFuture.allOf(inventoryFutures.toArray(new CompletableFuture[0]));
-        List<InventoryResponse> inventoryResponses=futures.thenApply(v->
-            inventoryFutures.stream()
-                    .map(CompletableFuture::join)
-                    .toList()).get();
-        //calculate total Amount and send to payment service
-        double totalPurchaseAmount=inventoryResponses.stream().map(InventoryResponse::getAmountPurchased).mapToDouble(Double::doubleValue).sum();
-        String paymentStatus=getPaymentResponse(orderRequest.getPaymentMode(),totalPurchaseAmount);
-        //update inventory and return orderResponse
-        List<CompletableFuture<InventoryResponse>> updateInventoryResponseFuture=updateInventory(orderRequest);
-        CompletableFuture<Void> updateFutures=CompletableFuture.allOf(updateInventoryResponseFuture.toArray(new CompletableFuture[0]));
-        List<InventoryResponse> updateResponse=updateFutures.thenApply(v->
-                updateInventoryResponseFuture.stream()
-                        .map(CompletableFuture::join).toList()).get();
-        //save and return order response
-        OrderResponse orderResponse = OrderResponse.builder()
+        List<InventoryResponse> checkInventoryResponses = checkInventoryForAllProducts(orderRequest);
+
+        boolean anyInventoryError = checkInventoryResponses.stream()
+                .anyMatch(Objects::isNull);
+
+        if (anyInventoryError) {
+            log.warn("OrderServiceV2 :: One or more inventory checks failed. Failing order.");
+            return buildFailedOrderResponse(orderRequest,
+                    "Order failed: One or more products exceed available quantity.");
+        }
+
+        double totalCost = calculateTotalCost(checkInventoryResponses);
+
+        String paymentStatus = processPayment(orderRequest, totalCost);
+
+        if (!"payment success".equalsIgnoreCase(paymentStatus)) {
+            return buildFailedOrderResponse(orderRequest, "Order failed: Payment unsuccessful.");
+        }
+
+        updateInventoryAfterPayment(orderRequest);
+
+        return saveSuccessfulOrder(orderRequest, paymentStatus, totalCost);
+    }
+
+    private List<InventoryResponse> checkInventoryForAllProducts(OrderRequest orderRequest) {
+        List<CompletableFuture<InventoryResponse>> checkInventoryFutures = orderRequest.getProducts().stream()
+                .map(product -> inventoryAsyncClient.checkInventory(product.getProductName(), product.getQuantity()))
+                .toList();
+
+        CompletableFuture<Void> allInventoryChecks = CompletableFuture.allOf(checkInventoryFutures.toArray(new CompletableFuture[0]));
+        try {
+            return allInventoryChecks
+                    .thenApply(v -> checkInventoryFutures.stream().map(CompletableFuture::join).toList())
+                    .get();
+        } catch (ExecutionException ex) {
+            log.error("Exception caught at inventory logic{}", ex.getMessage());
+            Throwable cause = ex.getCause();
+            if (cause instanceof ProductException exception) {
+                log.error("Exception caught at inventory service {}", cause.getMessage());
+                throw new ProductException(exception.getMessage());
+            }
+            throw new OrderServiceException(500, "Internal error: " + cause.getMessage());
+        } catch (Exception ex) {
+            throw new OrderServiceException(500, "Unexpected error: " + ex.getMessage());
+        }
+    }
+
+    private double calculateTotalCost(List<InventoryResponse> checkInventoryResponses) {
+        double totalCost = checkInventoryResponses.stream()
+                .mapToDouble(InventoryResponse::getAmountPurchased)
+                .sum();
+        log.info("Total purchase cost: {}", totalCost);
+        return totalCost;
+    }
+
+    private String processPayment(OrderRequest orderRequest, double totalCost) {
+        CompletableFuture<String> paymentFuture = paymentAsyncClient.getPaymentResponse(orderRequest.getPaymentMode(), totalCost);
+        try {
+            return paymentFuture.get();
+        } catch (ExecutionException ex) {
+            log.error("Exception caught at payment logic {}", ex.getMessage());
+            Throwable cause = ex.getCause();
+            if (cause instanceof PaymentException exception) {
+                log.error("Exception caught at payment service {}", cause.getMessage());
+                throw new PaymentException(exception.getMessage());
+            }
+            throw new OrderServiceException(500, "Internal error: " + cause.getMessage());
+        } catch (Exception ex) {
+            throw new OrderServiceException(500, "Unexpected error: " + ex.getMessage());
+        }
+    }
+
+    private void updateInventoryAfterPayment(OrderRequest orderRequest) {
+        List<CompletableFuture<InventoryResponse>> updateInventoryFutures = orderRequest.getProducts().stream()
+                .map(product -> inventoryAsyncClient.updateInventory(product.getProductName(), product.getQuantity()))
+                .toList();
+        try {
+            CompletableFuture.allOf(updateInventoryFutures.toArray(new CompletableFuture[0])).get();
+        } catch (InterruptedException | ExecutionException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    private OrderResponse buildFailedOrderResponse(OrderRequest orderRequest, String message) {
+        return OrderResponse.builder()
                 .transactionId(UUID.randomUUID().toString())
-                .paymentStatus("SUCCESS")
+                .paymentStatus("FAILED")
                 .products(orderRequest.getProducts())
                 .paymentMode(orderRequest.getPaymentMode())
-                .purchaseAmount(totalPurchaseAmount)
+                .purchaseAmount(0.0)
+                .userName(orderRequest.getUserName())
+                .exceptionMessage(message)
+                .build();
+    }
+
+    private OrderResponse saveSuccessfulOrder(OrderRequest orderRequest, String paymentStatus, double totalCost) {
+        OrderResponse orderResponse = OrderResponse.builder()
+                .transactionId(UUID.randomUUID().toString())
+                .paymentStatus(paymentStatus)
+                .products(orderRequest.getProducts())
+                .paymentMode(orderRequest.getPaymentMode())
+                .purchaseAmount(totalCost)
                 .userName(orderRequest.getUserName())
                 .build();
         orderRepo.save(orderResponse);
         return orderResponse;
     }
-
-    private List<CompletableFuture<InventoryResponse>> checkProductAvailability(OrderRequest orderRequest){
-        return orderRequest.getProducts()
-                .stream()
-                .map(item -> inventoryAsyncClient.checkInventory(item.getProductName(), item.getQuantity())).toList();
-    }
-
-    @SneakyThrows
-    private String getPaymentResponse(String paymentMode,double amount){
-        return paymentAsyncClient.getPaymentResponse(paymentMode,amount).get();
-    }
-
-    private List<CompletableFuture<InventoryResponse>> updateInventory(OrderRequest orderRequest) {
-        return orderRequest.getProducts()
-                .stream()
-                .map(item->inventoryAsyncClient.updateInventory(item.getProductName(),item.getQuantity())).toList();
-    }
-
 }

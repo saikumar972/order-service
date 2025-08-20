@@ -15,6 +15,8 @@ import org.springframework.web.client.RestTemplate;
 import java.nio.charset.StandardCharsets;
 import java.util.Base64;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.ExecutionException;
 
 @Service
 @Log4j2
@@ -42,8 +44,9 @@ public class PaymentAsyncClient {
             );
             return response.getBody();
         }).exceptionally(ex -> {
-            log.error("payment failed : {}", ex.getMessage());
-            if(ex instanceof HttpClientErrorException exception){
+            Throwable cause = (ex instanceof CompletionException || ex instanceof ExecutionException) ? ex.getCause() : ex;
+            log.error("payment failed : {}", ex.getCause().getMessage());
+            if(cause instanceof HttpClientErrorException exception){
                 throw new PaymentException(exception.getResponseBodyAsString());
             }else{
                 throw new RuntimeException(ex.getMessage());

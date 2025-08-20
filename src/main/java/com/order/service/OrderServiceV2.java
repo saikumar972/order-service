@@ -5,15 +5,17 @@ import com.order.asyncClient.PaymentAsyncClient;
 import com.order.dto.InventoryResponse;
 import com.order.dto.OrderRequest;
 import com.order.dto.OrderResponse;
+import com.order.exceptions.inventoryExceptions.ProductException;
+import com.order.exceptions.orderExceptions.OrderServiceException;
+import com.order.exceptions.paymentExceptions.PaymentException;
 import com.order.repo.OrderRepo;
 import lombok.AllArgsConstructor;
-import lombok.SneakyThrows;
 import lombok.extern.log4j.Log4j2;
 import org.springframework.stereotype.Service;
 import java.util.List;
-import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
 
 @Service
 @AllArgsConstructor
@@ -24,74 +26,107 @@ public class OrderServiceV2 {
     private final InventoryAsyncClient inventoryAsyncClient;
     private final PaymentAsyncClient paymentAsyncClient;
 
-    @SneakyThrows
     public OrderResponse orderResponseAsyncV2(OrderRequest orderRequest) {
-        // STEP 1: Check Inventory for each product
+        List<InventoryResponse> checkInventoryResponses = checkInventoryForAllProducts(orderRequest);
+
+        double totalCost = calculateTotalCost(checkInventoryResponses);
+
+        String paymentStatus = processPayment(orderRequest, totalCost);
+
+        updateInventoryAfterPayment(orderRequest);
+
+        return saveSuccessfulOrder(orderRequest, paymentStatus, totalCost);
+    }
+
+    private List<InventoryResponse> checkInventoryForAllProducts(OrderRequest orderRequest) {
         List<CompletableFuture<InventoryResponse>> checkInventoryFutures = orderRequest.getProducts().stream()
                 .map(product -> inventoryAsyncClient.checkInventory(product.getProductName(), product.getQuantity()))
                 .toList();
 
-        // Wait for all futures to complete
         CompletableFuture<Void> allInventoryChecks = CompletableFuture.allOf(checkInventoryFutures.toArray(new CompletableFuture[0]));
-        List<InventoryResponse> checkInventoryResponses = allInventoryChecks
-                .thenApply(v -> checkInventoryFutures.stream().map(CompletableFuture::join).toList())
-                .get();
-
-        boolean anyInventoryError = checkInventoryResponses.stream()
-                .anyMatch(Objects::isNull);
-
-        if (anyInventoryError) {
-            log.warn("OrderServiceV2 :: One or more inventory checks failed. Failing order.");
-            return OrderResponse.builder()
-                    .transactionId(UUID.randomUUID().toString())
-                    .paymentStatus("FAILED")
-                    .products(orderRequest.getProducts())
-                    .paymentMode(orderRequest.getPaymentMode())
-                    .purchaseAmount(0.0)
-                    .userName(orderRequest.getUserName())
-                    .exceptionMessage("Order failed: One or more products exceed available quantity.")
-                    .build();
+        try {
+            return allInventoryChecks
+                    .thenApply(v -> checkInventoryFutures.stream().map(CompletableFuture::join).toList())
+                    .get();
+        } catch (ExecutionException ex) {
+            log.error("Exception caught at inventory logic{}", ex.getMessage());
+            Throwable cause = ex.getCause();
+            if (cause instanceof ProductException exception) {
+                log.error("Exception caught at inventory service {}", cause.getMessage());
+                throw buildFailedOrderResponse(exception,orderRequest,"order failed due to inventory service");
+            }
+            throw new OrderServiceException(500, "Internal error: " + cause.getMessage());
+        } catch (Exception ex) {
+            throw new OrderServiceException(500, "Unexpected error: " + ex.getMessage());
         }
+    }
 
-        // STEP 2: Calculate total cost and initiate payment
+    private double calculateTotalCost(List<InventoryResponse> checkInventoryResponses) {
         double totalCost = checkInventoryResponses.stream()
                 .mapToDouble(InventoryResponse::getAmountPurchased)
                 .sum();
+        log.info("Total purchase cost: {}", totalCost);
+        return totalCost;
+    }
 
+    private String processPayment(OrderRequest orderRequest, double totalCost) {
         CompletableFuture<String> paymentFuture = paymentAsyncClient.getPaymentResponse(orderRequest.getPaymentMode(), totalCost);
-
-        String paymentStatus = paymentFuture.get();  // safe since exception is already thrown from client
-
-        if (!"payment success".equalsIgnoreCase(paymentStatus)) {
-            return OrderResponse.builder()
-                    .transactionId(UUID.randomUUID().toString())
-                    .paymentStatus("FAILED")
-                    .products(orderRequest.getProducts())
-                    .paymentMode(orderRequest.getPaymentMode())
-                    .purchaseAmount(0.0)
-                    .userName(orderRequest.getUserName())
-                    .exceptionMessage("Order failed: Payment unsuccessful.")
-                    .build();
+        try {
+            return paymentFuture.get();
+        } catch (ExecutionException ex) {
+            log.error("Exception caught at payment logic {}", ex.getMessage());
+            Throwable cause = ex.getCause();
+            if (cause instanceof PaymentException exception) {
+                log.error("Exception caught at payment service {}", cause.getMessage());
+                throw buildFailedOrderResponse(exception,orderRequest,"order failed due to payment service");
+            }
+            throw new OrderServiceException(500, "Internal error: " + cause.getMessage());
+        } catch (Exception ex) {
+            throw new OrderServiceException(500, "Unexpected error: " + ex.getMessage());
         }
+    }
 
-        // STEP 3: Update Inventory after successful payment
+    private void updateInventoryAfterPayment(OrderRequest orderRequest) {
         List<CompletableFuture<InventoryResponse>> updateInventoryFutures = orderRequest.getProducts().stream()
                 .map(product -> inventoryAsyncClient.updateInventory(product.getProductName(), product.getQuantity()))
                 .toList();
+        try {
+            CompletableFuture.allOf(updateInventoryFutures.toArray(new CompletableFuture[0])).get();
+        } catch (InterruptedException | ExecutionException e) {
+            throw new RuntimeException(e);
+        }
+    }
 
-        CompletableFuture.allOf(updateInventoryFutures.toArray(new CompletableFuture[0])).get();
-
-        // STEP 4: Save successful order
+    private OrderResponse saveSuccessfulOrder(OrderRequest orderRequest, String paymentStatus, double totalCost) {
         OrderResponse orderResponse = OrderResponse.builder()
                 .transactionId(UUID.randomUUID().toString())
-                .paymentStatus("SUCCESS")
+                .paymentStatus(paymentStatus)
                 .products(orderRequest.getProducts())
                 .paymentMode(orderRequest.getPaymentMode())
                 .purchaseAmount(totalCost)
                 .userName(orderRequest.getUserName())
                 .build();
-
         orderRepo.save(orderResponse);
         return orderResponse;
+    }
+
+    private OrderServiceException buildFailedOrderResponse(Exception exception,OrderRequest orderRequest, String paymentStatus) {
+        int statusCode=500;
+        if (exception instanceof ProductException) {
+            statusCode = 400;
+        }
+        if (exception instanceof PaymentException) {
+            statusCode = 400;
+        }
+        OrderResponse orderResponse = OrderResponse.builder()
+                .transactionId(UUID.randomUUID().toString())
+                .paymentStatus(paymentStatus)
+                .products(orderRequest.getProducts())
+                .paymentMode(orderRequest.getPaymentMode())
+                .purchaseAmount(0.0)
+                .userName(orderRequest.getUserName())
+                .exceptionMessage(exception.getMessage())
+                .build();
+        throw new OrderServiceException(statusCode,orderResponse);
     }
 }

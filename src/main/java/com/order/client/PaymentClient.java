@@ -17,7 +17,6 @@ import java.util.Base64;
 @Service
 @Log4j2
 public class PaymentClient {
-    //postconstruct
     @Value("${payment.name}")
     String userName;
     @Value("${payment.password}")

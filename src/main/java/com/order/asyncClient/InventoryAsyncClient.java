@@ -15,6 +15,8 @@ import org.springframework.web.client.RestTemplate;
 import java.nio.charset.StandardCharsets;
 import java.util.Base64;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.ExecutionException;
 
 @Service
 @Log4j2
@@ -43,12 +45,15 @@ public class InventoryAsyncClient {
             );
             return response.getBody();
         }).exceptionally(ex -> {
-            log.error("Inventory check failed for product {}: {}", product, ex.getMessage());
-            if(ex instanceof HttpClientErrorException.BadRequest exception){
-                log.error("Inventory check failed for product {}: {}", product, ex.getMessage());
-                throw new ProductException(exception.getResponseBodyAsString());
-            }else{
-                throw new RuntimeException(ex.getMessage());
+            log.error("Inventory exception caught for product {}: {}", product, ex.getMessage());
+            // Unwrap CompletionException to get the real cause
+            Throwable cause = (ex instanceof CompletionException || ex instanceof ExecutionException) ? ex.getCause() : ex;
+            log.error("unwrap Inventory exception for product {}: {}", product, ex.getMessage());
+            if (cause instanceof HttpClientErrorException httpClientErrorException) {
+                throw new ProductException(httpClientErrorException.getResponseBodyAsString());
+            } else {
+                log.error("RuntimeException caught for the product {}: {}", product, cause.getMessage());
+                throw new RuntimeException(cause);
             }
         });
     }
@@ -66,11 +71,15 @@ public class InventoryAsyncClient {
             );
             return inventory.getBody();
         }).exceptionally(ex -> {
-            log.error("update inventory failed for product {}: {}", product, ex.getMessage());
-            if(ex instanceof HttpClientErrorException exception){
-                throw new ProductException(exception.getResponseBodyAsString());
-            }else{
-                throw new RuntimeException(ex.getMessage());
+            log.error("Update Inventory exception caught for product {}: {}", product, ex.getMessage());
+            // Unwrap CompletionException to get the real cause
+            Throwable cause = (ex instanceof CompletionException || ex instanceof ExecutionException) ? ex.getCause() : ex;
+            log.error("unwrap Update Inventory exception for product {}: {}", product, ex.getMessage());
+            if (cause instanceof HttpClientErrorException httpClientErrorException) {
+                throw new ProductException(httpClientErrorException.getResponseBodyAsString());
+            } else {
+                log.error("Update inventory : RuntimeException caught for the product {}: {}", product, cause.getMessage());
+                throw new RuntimeException(cause);
             }
         });
     }

@@ -5,7 +5,9 @@ import com.order.client.PaymentClient;
 import com.order.dto.InventoryResponse;
 import com.order.dto.OrderRequest;
 import com.order.dto.OrderResponse;
+import com.order.exceptions.inventoryExceptions.ProductException;
 import com.order.exceptions.orderExceptions.OrderServiceException;
+import com.order.exceptions.paymentExceptions.PaymentException;
 import com.order.repo.OrderRepo;
 import lombok.AllArgsConstructor;
 import lombok.extern.log4j.Log4j2;
@@ -83,8 +85,11 @@ public class OrderServiceV1 {
     // Utility: Build an OrderServiceException with code and response
     private OrderServiceException buildOrderServiceException(Exception e, OrderRequest orderRequest, String paymentStatus) {
         int statusCode = 500;
-        if (e instanceof HttpClientErrorException httpEx) {
-            statusCode = httpEx.getStatusCode().value();
+        if (e instanceof ProductException) {
+            statusCode = 400;
+        }
+        if (e instanceof PaymentException) {
+            statusCode = 400;
         }
         log.error("Exception occurred: {}", e.getMessage());
         OrderResponse failedResponse = OrderResponse.builder()
