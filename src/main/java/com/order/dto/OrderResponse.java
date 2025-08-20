@@ -1,11 +1,11 @@
 package com.order.dto;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
 import jakarta.persistence.*;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
-
 import java.util.List;
 
 @AllArgsConstructor
@@ -14,6 +14,7 @@ import java.util.List;
 @Builder
 @Entity
 @Table(name="order_table")
+@JsonInclude(JsonInclude.Include.NON_NULL)
 public class OrderResponse {
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
@@ -26,4 +27,5 @@ public class OrderResponse {
     private List<Product> products;
     private double purchaseAmount;
     private String userName;
+    private String exceptionMessage;
 }
