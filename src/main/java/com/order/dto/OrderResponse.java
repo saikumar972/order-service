@@ -28,4 +28,6 @@ public class OrderResponse {
     private double purchaseAmount;
     private String userName;
     private String exceptionMessage;
+    @Transient
+    private OrderErrorResponse orderErrorResponse;
 }

@@ -9,10 +9,10 @@ import com.order.exceptions.inventoryExceptions.ProductException;
 import com.order.exceptions.orderExceptions.OrderServiceException;
 import com.order.exceptions.paymentExceptions.PaymentException;
 import com.order.repo.OrderRepo;
+import com.order.util.JsonConverter;
 import lombok.AllArgsConstructor;
 import lombok.extern.log4j.Log4j2;
 import org.springframework.stereotype.Service;
-import org.springframework.web.client.HttpClientErrorException;
 import java.util.List;
 import java.util.UUID;
 
@@ -100,6 +100,7 @@ public class OrderServiceV1 {
                 .purchaseAmount(0.0)
                 .userName(orderRequest.getUserName())
                 .exceptionMessage(e.getMessage())
+                .orderErrorResponse(JsonConverter.getOrderErrorResponse(e.getMessage()))
                 .build();
         return new OrderServiceException(statusCode, failedResponse);
     }

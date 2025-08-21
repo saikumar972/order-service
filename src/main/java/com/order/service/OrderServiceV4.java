@@ -10,6 +10,7 @@ import com.order.exceptions.inventoryExceptions.ProductException;
 import com.order.exceptions.orderExceptions.OrderServiceException;
 import com.order.exceptions.paymentExceptions.PaymentException;
 import com.order.repo.OrderRepo;
+import com.order.util.JsonConverter;
 import lombok.AllArgsConstructor;
 import lombok.extern.log4j.Log4j2;
 import org.springframework.stereotype.Service;
@@ -30,22 +31,9 @@ public class OrderServiceV4 {
     public OrderResponse orderResponseV4(OrderRequest orderRequest){
         List<InventoryResponse> checkInventoryResponses = checkInventoryForAllProducts(orderRequest);
 
-        boolean anyInventoryError = checkInventoryResponses.stream()
-                .anyMatch(Objects::isNull);
-
-        if (anyInventoryError) {
-            log.warn("OrderServiceV2 :: One or more inventory checks failed. Failing order.");
-            return buildFailedOrderResponse(orderRequest,
-                    "Order failed: One or more products exceed available quantity.");
-        }
-
         double totalCost = calculateTotalCost(checkInventoryResponses);
 
         String paymentStatus = processPayment(orderRequest, totalCost);
-
-        if (!"payment success".equalsIgnoreCase(paymentStatus)) {
-            return buildFailedOrderResponse(orderRequest, "Order failed: Payment unsuccessful.");
-        }
 
         updateInventoryAfterPayment(orderRequest);
 
@@ -111,18 +99,6 @@ public class OrderServiceV4 {
         }
     }
 
-    private OrderResponse buildFailedOrderResponse(OrderRequest orderRequest, String message) {
-        return OrderResponse.builder()
-                .transactionId(UUID.randomUUID().toString())
-                .paymentStatus("FAILED")
-                .products(orderRequest.getProducts())
-                .paymentMode(orderRequest.getPaymentMode())
-                .purchaseAmount(0.0)
-                .userName(orderRequest.getUserName())
-                .exceptionMessage(message)
-                .build();
-    }
-
     private OrderResponse saveSuccessfulOrder(OrderRequest orderRequest, String paymentStatus, double totalCost) {
         OrderResponse orderResponse = OrderResponse.builder()
                 .transactionId(UUID.randomUUID().toString())
@@ -135,4 +111,5 @@ public class OrderServiceV4 {
         orderRepo.save(orderResponse);
         return orderResponse;
     }
+
 }

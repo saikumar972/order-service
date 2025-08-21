@@ -9,6 +9,7 @@ import com.order.exceptions.inventoryExceptions.ProductException;
 import com.order.exceptions.orderExceptions.OrderServiceException;
 import com.order.exceptions.paymentExceptions.PaymentException;
 import com.order.repo.OrderRepo;
+import com.order.util.JsonConverter;
 import lombok.AllArgsConstructor;
 import lombok.extern.log4j.Log4j2;
 import org.springframework.stereotype.Service;
@@ -49,7 +50,7 @@ public class OrderServiceV2 {
                     .thenApply(v -> checkInventoryFutures.stream().map(CompletableFuture::join).toList())
                     .get();
         } catch (ExecutionException ex) {
-            log.error("Exception caught at inventory logic{}", ex.getMessage());
+            log.error("Exception caught at inventory logic {}", ex.getMessage());
             Throwable cause = ex.getCause();
             if (cause instanceof ProductException exception) {
                 log.error("Exception caught at inventory service {}", cause.getMessage());
@@ -126,6 +127,7 @@ public class OrderServiceV2 {
                 .purchaseAmount(0.0)
                 .userName(orderRequest.getUserName())
                 .exceptionMessage(exception.getMessage())
+                .orderErrorResponse(JsonConverter.getOrderErrorResponse(exception.getMessage()))
                 .build();
         throw new OrderServiceException(statusCode,orderResponse);
     }
